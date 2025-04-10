@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>ZK Dash</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.6.0/p5.min.js"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        font-family: 'Arial', sans-serif;
+        background-color: #1f0044;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      let player;
+      let obstacles = [];
+      let collectibles = [];
+      let particles = [];
+      let trail = [];
+      let score = 0;
+      let gameOver = false;
+      let gameStarted = false;
+      let shakeTimer = 0;
+      let tutorialTimer = 0;
+      let tutorialMessages = [
+        "Establishing SP1 connection...",
+        "ZK-Agent activated.",
+        "Collect proof particles. Avoid invalid operations!",
+        "Press SPACE to jump! Unlimited jumps enabled!"
+      ];
+      let currentTutorial = 0;
+      let tutorialDuration = 180; // 3 seconds per message at 60fps
+      
+      // Level system
+      let level = 1;
+      let levelUpAnimation = 0;
+      let levelUpSound = null;
+      
+      // Quest system with level progression
+      let quests = {
+        jumps: { goal: 3, count: 0, done: false, name: "Jump 3 times" },
+        proofs: { goal: 5, count: 0, done: false, name: "Collect 5 Proofs" },
+        time: { goal: 10, timer: 0, done: false, name: "Survive for 10 seconds" }
+      };
+      
+      // Level definitions
+      let levelQuests = [
+        null, // Level 0 dummy (levels start at 1)
+        { // Level 1
+          jumps: { goal: 3, name: "Jump 3 times" },
+          proofs: { goal: 5, name: "Collect 5 Proofs" },
+          time: { goal: 10, name: "Survive for 10 seconds" }
+        },
+        { // Level 2
+          jumps: { goal: 10, name: "Jump 10 times" },
+          proofs: { goal: 15, name: "Collect 15 Proofs" },
+          time: { goal: 20, name: "Survive for 20 seconds" }
+        },
+        { // Level 3
+          jumps: { goal: 20, name: "Jump 20 times" },
+          proofs: { goal: 30, name: "Collect 30 Proofs" },
+          time: { goal: 30, name: "Survive for 30 seconds" }
+        },
+        { // Level 4
+          jumps: { goal: 30, name: "Jump 30 times" },
+          proofs: { goal: 50, name: "Collect 50 Proofs" },
+          time: { goal: 45, name: "Survive for 45 seconds" }
+        },
+        { // Level 5
+          jumps: { goal: 50, name: "Jump 50 times" },
+          proofs: { goal: 75, name: "Collect 75 Proofs" },
+          time: { goal: 60, name: "Survive for 60 seconds" }
+        }
+      ];
+      
+      let gameTime = 0;
+      let totalJumps = 0;
+      let totalProofs = 0;
+
+      function setup() {
+        createCanvas(800, 400);
+        player = new Player();
+        // Create initial particles
+        for (let i = 0; i < 100; i++) {
+          particles.push(new Particle());
+        }
+        
+        // Set initial quests
+        updateQuestsForLevel(level);
+      }
+      
+      function updateQuestsForLevel(level) {
+        if (level > levelQuests.length - 1) {
+          // Max level reached
+          return;
+        }
+        
+        let levelData = levelQuests[level];
+        
+        // Reset quest status but keep cumulative progress
+        for (let key in quests) {
+          quests[key].goal = levelData[key].goal;
+          quests[key].name = levelData[key].name;
+          quests[key].done = false;
+          
+          // Don't reset progress counters, but compare to new goals
+          if (key === "jumps") {
+            quests[key].count = totalJumps;
+            if (totalJumps >= quests[key].goal) {
+              quests[key].done = true;
+            }
+          } else if (key === "proofs") {
+            quests[key].count = totalProofs;
+            if (totalProofs >= quests[key].goal) {
+              quests[key].done = true;
+            }
+          } else if (key === "time") {
+            quests[key].timer = gameTime;
+            if (gameTime >= quests[key].goal) {
+              quests[key].done = true;
+            }
+          }
+        }
+      }
+      
+      function checkLevelUp() {
+        // Check if all quests are completed
+        let allCompleted = true;
+        for (let key in quests) {
+          if (!quests[key].done) {
+            allCompleted = false;
+            break;
+          }
+        }
+        
+        if (allCompleted) {
+          level++;
+          levelUpAnimation = 120; // 2 seconds animation
+          
+          // Update quests for new level
+          updateQuestsForLevel(level);
+          
+          return true;
+        }
+        
+        return false;
+      }
+
+      function draw() {
+        // Background gradient
+        background(40, 0, 60);
+        
+        // Apply screen shake effect
+        push();
+        applyShake();
+        
+        // Draw particles in the background
+        drawParticles();
+
+        if (!gameStarted) {
+          drawStartScreen();
+          return;
+        }
+
+        if (gameOver) {
+          drawGameOver();
+          return;
+        }
+
+        // Update game time
+        if (!gameStarted) {
+          gameTime += 1/60; // Approximate deltaTime
+          quests.time.timer = gameTime;
+          if (quests.time.timer >= quests.time.goal && !quests.time.done) {
+            quests.time.done = true;
+          }
+        }
+        
+        // Check level up condition
+        if (gameStarted && !gameOver) {
+          gameTime += 1/60; // Approximate deltaTime
+          quests.time.timer = gameTime;
+          if (gameTime >= quests.time.goal && !quests.time.done) {
+            quests.time.done = true;
+            checkLevelUp();
+          }
+        }
+
+        // Level up animation
+        if (levelUpAnimation > 0) {
+          drawLevelUpAnimation();
+          levelUpAnimation--;
+        }
+
+        // Show tutorial if needed
+        if (tutorialTimer > 0) {
+          drawTutorial();
+          tutorialTimer--;
+          if (tutorialTimer <= 0 && currentTutorial < tutorialMessages.length - 1) {
+            currentTutorial++;
+            tutorialTimer = tutorialDuration;
+          }
+        }
+
+        // Draw and update player trail
+        updateTrail();
+        drawTrail();
+        
+        // Game Loop
+        player.update();
+        player.show();
+
+        // Obstacles
+        if (frameCount % 90 === 0) {
+          obstacles.push(new Obstacle());
+        }
+
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+          obstacles[i].update();
+          obstacles[i].show();
+
+          if (obstacles[i].hits(player)) {
+            triggerShake(30);
+            gameOver = true;
+          }
+
+          if (obstacles[i].offscreen()) {
+            obstacles.splice(i, 1);
+          }
+        }
+
+        // Collectibles
+        if (frameCount % 120 === 0) {
+          collectibles.push(new Collectible());
+        }
+
+        for (let i = collectibles.length - 1; i >= 0; i--) {
+          collectibles[i].update();
+          collectibles[i].show();
+
+          if (collectibles[i].collect(player)) {
+            score += 10;
+            totalProofs++;
+            
+            // Update quest
+            if (totalProofs >= quests.proofs.goal && !quests.proofs.done) {
+              quests.proofs.done = true;
+              checkLevelUp();
+            }
+            
+            quests.proofs.count = totalProofs;
+            collectibles.splice(i, 1);
+          } else if (collectibles[i].offscreen()) {
+            collectibles.splice(i, 1);
+          }
+        }
+
+        // Score and Level
+        fill(255);
+        textSize(24);
+        textAlign(LEFT);
+        text("Proofs: " + score, 20, 30);
+        text("Level: " + level, 20, 60);
+        
+        // Draw quests
+        drawQuests();
+        
+        pop(); // End screen shake effect
+      }
+      
+      function drawLevelUpAnimation() {
+        let alpha = map(levelUpAnimation, 120, 0, 255, 0);
+        
+        // Semi-transparent overlay
+        fill(0, 100, 255, alpha * 0.3);
+        rect(0, 0, width, height);
+        
+        // Level up text
+        textAlign(CENTER, CENTER);
+        textSize(48);
+        fill(255, 255, 0, alpha);
+        text("LEVEL UP!", width / 2, height / 2 - 40);
+        
+        textSize(32);
+        fill(255, alpha);
+        text("Level " + (level-1) + " → Level " + level, width / 2, height / 2 + 20);
+      }
+
+      function drawParticles() {
+        for (let p of particles) {
+          p.update();
+          p.show();
+        }
+      }
+
+      function updateTrail() {
+        if (frameCount % 3 === 0 && player.vy !== 0) {
+          trail.push({
+            x: player.x + player.r / 2,
+            y: player.y + player.r / 2,
+            life: 15
+          });
+        }
+      }
+
+      function drawTrail() {
+        for (let i = trail.length - 1; i >= 0; i--) {
+          let t = trail[i];
+          fill(100, 200, 255, map(t.life, 0, 15, 0, 150));
+          noStroke();
+          ellipse(t.x, t.y, 20 * (t.life/15));
+          t.life--;
+          if (t.life <= 0) {
+            trail.splice(i, 1);
+          }
+        }
+      }
+
+      function drawTutorial() {
+        fill(255);
+        textSize(18);
+        textAlign(CENTER);
+        text(tutorialMessages[currentTutorial], width / 2, 50);
+      }
+
+      function drawQuests() {
+        fill(255);
+        textSize(14);
+        textAlign(LEFT);
+        text("Quests (Level " + level + "):", 20, 90);
+        let y = 110;
+        for (let key in quests) {
+          let q = quests[key];
+          let progress;
+          
+          if (key === "jumps") {
+            progress = totalJumps;
+          } else if (key === "proofs") {
+            progress = totalProofs;
+          } else if (key === "time") {
+            progress = Math.floor(gameTime);
+          }
+          
+          let status = q.done ? "✅" : `${Math.floor(progress)} / ${q.goal}`;
+          text(`- ${q.name}: ${status}`, 20, y);
+          y += 20;
+        }
+      }
+
+      function applyShake() {
+        if (shakeTimer > 0) {
+          translate(random(-5, 5), random(-5, 5));
+          shakeTimer--;
+        }
+      }
+
+      function triggerShake(frames = 20) {
+        shakeTimer = frames;
+      }
+
+      function drawStartScreen() {
+        // Purple gradient background
+        background(20, 0, 30);
+        
+        // Draw particles
+        drawParticles();
+
+        // Title
+        fill(255, 100, 255);
+        textSize(72);
+        textAlign(CENTER);
+        text("ZK DASH", width / 2, height / 2 - 50);
+        
+        // Play button
+        fill(255, 0, 255);
+        rect(width/2 - 125, height/2, 250, 60, 30);
+        fill(255);
+        textSize(32);
+        text("PLAY", width / 2, height / 2 + 37);
+        
+        // Instructions
+        textSize(18);
+        fill(200, 200, 200);
+        text("Press SPACE to start", width / 2, height / 2 + 100);
+      }
+
+      function drawGameOver() {
+        // Semi-transparent overlay
+        fill(0, 0, 0, 200);
+        rect(0, 0, width, height);
+        
+        // Game over message
+        fill(255, 100, 100);
+        textSize(48);
+        textAlign(CENTER);
+        text("GAME OVER", width / 2, height / 2 - 50);
+        
+        // Score
+        fill(255);
+        textSize(32);
+        text("Proofs Collected: " + score, width / 2, height / 2 + 10);
+        text("Level Reached: " + level, width / 2, height / 2 + 50);
+        
+        // Game over flavor text
+        textSize(24);
+        text("You collected " + score + " Proofs before falling off the chain.", width / 2, height / 2 - 10);
+        
+        // Restart instructions
+        textSize(20);
+        text("Press 'R' to restart", width / 2, height / 2 + 100);
+      }
+
+      function keyPressed() {
+        if (!gameStarted && key === ' ') {
+          gameStarted = true;
+          tutorialTimer = tutorialDuration;
+        } else if (gameOver && key === 'r') {
+          resetGame();
+        } else if (key === ' ' && !gameOver) {
+          player.jump();
+          
+          // Update jump quest
+          totalJumps++;
+          quests.jumps.count = totalJumps;
+          
+          if (totalJumps >= quests.jumps.goal && !quests.jumps.done) {
+            quests.jumps.done = true;
+            checkLevelUp();
+          }
+        }
+      }
+
+      function resetGame() {
+        score = 0;
+        obstacles = [];
+        collectibles = [];
+        trail = [];
+        gameOver = false;
+        gameTime = 0;
+        level = 1;
+        totalJumps = 0;
+        totalProofs = 0;
+        player = new Player();
+        
+        // Reset quests for level 1
+        updateQuestsForLevel(level);
+        
+        // Reset tutorial
+        currentTutorial = 0;
+        tutorialTimer = tutorialDuration;
+      }
+
+      class Player {
+        constructor() {
+          this.r = 60; // Larger size
+          this.x = 100;
+          this.y = height - this.r;
+          this.vy = 0;
+          this.gravity = 1.5;
+          this.jumpCooldown = 0;
+          this.blinkTimer = 0;
+          this.moodState = 0; // 0: normal, 1: happy, 2: surprised
+          this.moodTimer = 0;
+        }
+
+        jump() {
+          if (this.jumpCooldown <= 0) {
+            this.vy = -25;
+            this.jumpCooldown = 5;
+            this.moodState = 2; // Surprised when jumping
+            this.moodTimer = 10;
+            
+            // Jump effect
+            for (let i = 0; i < 5; i++) {
+              trail.push({
+                x: this.x + this.r / 2 + random(-10, 10),
+                y: this.y + this.r / 2 + random(-5, 5),
+                life: 20
+              });
+            }
+          }
+        }
+
+        update() {
+          this.y += this.vy;
+          this.vy += this.gravity;
+          this.y = constrain(this.y, 0, height - this.r);
+          
+          if (this.jumpCooldown > 0) {
+            this.jumpCooldown--;
+          }
+          
+          if (this.moodTimer > 0) {
+            this.moodTimer--;
+          } else {
+            // Return to normal mood
+            this.moodState = 0;
+          }
+          
+          // Randomly blink
+          if (frameCount % 120 === 0 && random(1) > 0.5) {
+            this.blinkTimer = 5;
+          }
+          
+          if (this.blinkTimer > 0) {
+            this.blinkTimer--;
+          }
+        }
+
+        show() {
+          push();
+          translate(this.x, this.y);
+          
+          // Pink crab body (oval)
+          fill(255, 150, 220);
+          ellipse(this.r/2, this.r/2, this.r, this.r * 0.7);
+          
+          // Claws
+          // Left claw
+          push();
+          if (this.moodState === 1) { // Happy mood - raised claws
+            translate(0, -5);
+            rotate(-0.2);
+          }
+          
+          fill(255, 120, 200);
+          ellipse(0, this.r * 0.4, this.r * 0.4, this.r * 0.5);
+          pop();
+          
+          // Right claw
+          push();
+          if (this.moodState === 1) { // Happy mood - raised claws
+            translate(0, -5);
+            rotate(0.2);
+          }
+          
+          fill(255, 120, 200);
+          ellipse(this.r, this.r * 0.4, this.r * 0.4, this.r * 0.5);
+          pop();
+          
+          // Eyes
+          fill(0);
+          if (this.blinkTimer <= 0) {
+            // Normal eyes
+            if (this.moodState === 2) { // Surprised
+              ellipse(this.r * 0.3, this.r * 0.3, 12, 14);
+              ellipse(this.r * 0.7, this.r * 0.3, 12, 14);
+            } else {
+              ellipse(this.r * 0.3, this.r * 0.35, 8, 12);
+              ellipse(this.r * 0.7, this.r * 0.35, 8, 12);
+            }
+          } else {
+            // Blinking animation
+            fill(0);
+            rect(this.r * 0.25, this.r * 0.35, 10, 2);
+            rect(this.r * 0.65, this.r * 0.35, 10, 2);
+          }
+          
+          // Mouth
+          if (this.moodState === 1) { // Happy
+            fill(200, 80, 80);
+            arc(this.r * 0.5, this.r * 0.5, 20, 15, 0, PI);
+          } else if (this.moodState === 2) { // Surprised
+            fill(200, 120, 120);
+            ellipse(this.r * 0.5, this.r * 0.55, 15, 20);
+          } else { // Normal
+            fill(200, 100, 100);
+            arc(this.r * 0.5, this.r * 0.5, 15, 10, 0, PI);
+          }
+          
+          // Hat - without the logo
+          fill(255); // White hat base
+          arc(this.r * 0.5, this.r * 0.2, this.r * 0.7, this.r * 0.4, PI, TWO_PI);
+          
+          fill(255, 50, 150); // Pink hat band
+          rect(this.r * 0.15, this.r * 0.2, this.r * 0.7, this.r * 0.1);
+          
+          // SP1 Logo removed - left empty
+          
+          pop();
+          
+          // Jump indicator
+          if (this.jumpCooldown <= 0) {
+            fill(0, 255, 0, 150);
+          } else {
+            fill(255, 0, 0, 150);
+          }
+          ellipse(this.x + this.r - 10, this.y + 10, 8, 8);
+        }
+      }
+
+      class Obstacle {
+        constructor() {
+          this.x = width;
+          this.w = 40;
+          this.h = random(40, 100);
+          this.speed = 6; // Slower speed
+          this.pulseSize = 0;
+        }
+
+        update() {
+          this.x -= this.speed;
+          this.pulseSize = sin(frameCount * 0.1) * 3;
+        }
+
+        show() {
+          // Main obstacle
+          fill(255, 50, 100);
+          rect(this.x, height - this.h, this.w, this.h, 4);
+          
+          // Pulsing outline
+          noFill();
+          stroke(255, 100, 150, 150);
+          strokeWeight(2 + this.pulseSize);
+          rect(this.x - 2, height - this.h - 2, this.w + 4, this.h + 4, 6);
+          noStroke();
+        }
+
+        offscreen() {
+          return this.x < -this.w;
+        }
+
+        hits(player) {
+          // Adjust hitbox for the crab
+          let hitboxX = player.x + player.r * 0.2;
+          let hitboxY = player.y + player.r * 0.3;
+          let hitboxWidth = player.r * 0.6;
+          let hitboxHeight = player.r * 0.7;
+          
+          return (
+            hitboxX < this.x + this.w &&
+            hitboxX + hitboxWidth > this.x &&
+            hitboxY + hitboxHeight > height - this.h
+          );
+        }
+      }
+
+      class Collectible {
+        constructor() {
+          this.x = width;
+          this.y = random(height - 150, height - 50);
+          this.r = 20;
+          this.speed = 6; // Slower speed
+          this.rotation = 0;
+          this.pulseSize = 0;
+        }
+
+        update() {
+          this.x -= this.speed;
+          this.rotation += 0.05;
+          this.pulseSize = sin(frameCount * 0.2) * 2;
+        }
+
+        show() {
+          push();
+          translate(this.x, this.y);
+          rotate(this.rotation);
+          
+          // Outer glow
+          fill(180, 0, 255, 100);
+          ellipse(0, 0, (this.r * 2) + 10 + this.pulseSize);
+          
+          // Main collectible
+          fill(200, 0, 255);
+          ellipse(0, 0, this.r * 2);
+          
+          // Inner detail
+          fill(255, 200, 255);
+          textSize(14);
+          textAlign(CENTER, CENTER);
+          text("SP1", 0, 0);
+          
+          pop();
+        }
+
+        collect(player) {
+          // Adjust hitbox for the crab
+          let hitboxX = player.x + player.r * 0.2;
+          let hitboxY = player.y + player.r * 0.3;
+          let hitboxWidth = player.r * 0.6;
+          let hitboxHeight = player.r * 0.7;
+          
+          return (
+            dist(this.x, this.y, hitboxX + hitboxWidth/2, hitboxY + hitboxHeight/2) < this.r + hitboxWidth/2
+          );
+        }
+
+        offscreen() {
+          return this.x < -this.r;
+        }
+      }
+
+      class Particle {
+        constructor() {
+          this.x = random(width);
+          this.y = random(height);
+          this.size = random(1, 4);
+          this.speed = random(0.5, 2);
+          this.alpha = random(50, 150);
+          this.color = random() > 0.7 ? color(255, 100, 255, this.alpha) : color(100, 150, 255, this.alpha);
+        }
+
+        update() {
+          this.x -= this.speed;
+          if (this.x < 0) {
+            this.x = width;
+            this.y = random(height);
+          }
+        }
+
+        show() {
+          noStroke();
+          fill(this.color);
+          ellipse(this.x, this.y, this.size);
+        }
+      }
+    </script>
+  </body>
+</html>
