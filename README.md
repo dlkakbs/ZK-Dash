@@ -14,5 +14,5 @@ A mini endless runner game themed around zk-proofs and Succinct's SP1 prover.
 
 ---
 
-🧠 Created with love for the @provewithus community  
+🧠 Created with love for the @SuccinctLabs community  
 MIT License
